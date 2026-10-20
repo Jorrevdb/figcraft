@@ -98,7 +98,11 @@ pub fn paint_name_faded(painter: &Painter, left_center: Pos2, name: &str, font: 
         mesh.indices = vec![0, 1, 2, 0, 2, 3];
         painter.add(egui::Shape::mesh(mesh));
     }
-    Rect::from_min_size(galley_pos, vec2(galley_size.x.min(max_w), galley_size.y))
+    if rtl {
+        Rect::from_min_max(pos2(galley_pos.x.max(clip.min.x), clip.min.y), pos2(clip.max.x, clip.max.y))
+    } else {
+        Rect::from_min_size(galley_pos, vec2(galley_size.x.min(max_w), galley_size.y))
+    }
 }
 
 /// Each shown cluster's left and right x in a galley of `v.text` laid out from x = 0.
