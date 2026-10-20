@@ -49,6 +49,30 @@ fn names_elide_at_their_end() {
 }
 
 #[test]
+fn long_tab_names_fade_at_the_width_without_an_ellipsis() {
+    let ctx = egui::Context::default();
+    let name = "A filename that is much too long for one tab";
+    let mut long_rect = egui::Rect::NOTHING;
+    let mut short_rect = egui::Rect::NOTHING;
+    let mut output = ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), ..Default::default() }, |ui| {
+        let painter = ui.painter();
+        long_rect = paint_name_faded(painter, egui::pos2(20.0, 30.0), name, regular(12.0), Color32::BLACK, 60.0, Color32::WHITE);
+        short_rect = paint_name_faded(painter, egui::pos2(20.0, 60.0), "Short", regular(12.0), Color32::BLACK, 60.0, Color32::WHITE);
+    });
+    output.textures_delta.clear();
+    assert_eq!(long_rect.width(), 60.0);
+    assert!(short_rect.width() < 60.0);
+    assert!(
+        output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == name)),
+        "paint the full name instead of replacing its end with an ellipsis"
+    );
+    assert!(
+        output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|vertex| vertex.color.a() == 0) && mesh.vertices.iter().any(|vertex| vertex.color.a() == 255))),
+        "overlay a transparent-to-background gradient on the clipped end"
+    );
+}
+
+#[test]
 fn rename_caret_moves_visually() {
     let ctx = egui::Context::default();
     let id = Id::new("rename_test");
