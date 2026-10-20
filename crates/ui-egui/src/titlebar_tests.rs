@@ -176,6 +176,22 @@ fn double_clicking_a_tab_name_renames_that_file() {
 }
 
 #[test]
+fn triple_clicking_a_tab_name_starts_renaming() {
+    let mut u = Ui::new(TitleBar::Custom);
+    u.app.session.execute("file.rename", &json!({"name": "Original"})).unwrap();
+    let uid = u.app.session.docs[u.app.session.active].uid;
+    let name = pos2(100.0, 20.0);
+
+    u.click(name);
+    u.time += 0.1;
+    u.click(name);
+    u.time += 0.1;
+    u.click(name);
+
+    assert_eq!(u.app.ui.rename_tab, Some(uid));
+}
+
+#[test]
 fn hovering_a_file_tab_shows_its_document_preview() {
     let mut u = Ui::new(TitleBar::Custom);
     u.app.session.execute("node.create", &json!({"type": "frame", "width": 240, "height": 160})).unwrap();

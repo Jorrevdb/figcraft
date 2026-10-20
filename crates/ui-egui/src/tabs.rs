@@ -61,6 +61,10 @@ fn open_progress(opening: &[(u64, f64)], uid: u64, now: f64) -> f32 {
     opening.iter().find(|(u, _)| *u == uid).map_or(1.0, |(_, started)| ((now - started) / OPEN_TIME).clamp(0.0, 1.0) as f32)
 }
 
+fn divider_rect(x: f32, rect: Rect) -> Rect {
+    Rect::from_min_size(pos2(x, rect.min.y), vec2(1.0, rect.height()))
+}
+
 struct TabLayout {
     first: usize,
     widths: Vec<f32>,
@@ -143,7 +147,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         } else if hresp.hovered() {
             ui.painter().rect_filled(hr, CornerRadius::ZERO, t.hover);
         }
-        ui.painter().line_segment([pos2(hr.min.x, rect.min.y + 10.0), pos2(hr.min.x, rect.max.y - 10.0)], Stroke::new(1.0, t.border));
+        ui.painter().rect_filled(divider_rect(hr.min.x, hr), CornerRadius::ZERO, t.border_strong);
         icons::paint(ui.painter(), Rect::from_center_size(hr.center(), vec2(16.0, 16.0)), Icon::Home, t.icon);
         if hresp.clicked() {
             if let Some(p) = app.ui.present.take() {
@@ -152,7 +156,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             app.ui.home = true;
         }
         x += 44.0;
-        ui.painter().line_segment([pos2(x, rect.min.y), pos2(x, rect.max.y)], Stroke::new(1.0, t.border));
+        ui.painter().rect_filled(divider_rect(x, rect), CornerRadius::ZERO, t.border_strong);
         let document_tabs: Vec<usize> = app.session.docs.iter().enumerate().filter_map(|(i, d)| app.shows(d.uid).then_some(i)).collect();
         let now = ui.input(|input| input.time);
         let motion_id = ui.id().with("tab_motion");
@@ -284,7 +288,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
                 drag_overlay = Some((paint_r, name.clone(), dirty, icon_color, text_color));
             }
             let editing_tab = app.ui.rename_tab == Some(d.uid);
-            let name_start = resp.double_clicked()
+            let name_start = (resp.double_clicked() || resp.triple_clicked())
                 && ui.input(|input| input.pointer.interact_pos()).is_some_and(|p| {
                     let label_rect = Rect::from_min_max(pos2(r.min.x + 32.0, r.min.y), pos2(r.max.x - 40.0, r.max.y));
                     label_rect.contains(p)
@@ -622,34 +626,10 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
                 app.run("file.close", json!({"index": i}));
             }
         }
-        if let Some(keep_uid) = close_many {
-            if let Some(uid) = keep_uid
-                && let Some(index) = app.session.docs.iter().position(|doc| doc.uid == uid)
-            {
-                app.run("doc.switch", json!({"index": index}));
-                app.ui.home = false;
-            }
-            let close_uids: Vec<u64> = app.session.docs.iter().rev().map(|doc| doc.uid).filter(|uid| Some(*uid) != keep_uid).collect();
-            let discard = ui.input(|input| input.modifiers.alt);
-            let mut unsaved = false;
-            for uid in close_uids {
-                let Some(index) = app.session.docs.iter().position(|doc| doc.uid == uid) else { continue };
-                let dirty = app.session.docs.get(index).is_some_and(|doc| doc.is_dirty() && doc.branch_of.is_none());
-                if dirty && !discard {
-                    unsaved = true;
-                    continue;
-                }
-                app.run("file.close", json!({"index": index, "force": dirty}));
-            }
-            if unsaved {
-                app.toast(trf(
-                    "Unsaved changes: save first, or close again with {key} to discard",
-                    &[("key", &crate::toolbar::pretty_shortcut("Alt"))],
-                ));
-            }
-            if keep_uid.is_none() && app.session.docs.is_empty() {
-                app.ui.home = true;
-            }
+        if let Some(keep_uid) = close_many
+            && close_tabs(app, keep_uid, ui.input(|input| input.modifiers.alt))
+        {
+            app.toast(trf("Unsaved changes: save first, or close again with {key} to discard", &[("key", &crate::toolbar::pretty_shortcut("Alt"))]));
         }
         if app.ui.present_uid.is_some_and(|uid| !app.session.docs.iter().any(|d| d.uid == uid)) {
             app.ui.present = None;
@@ -660,6 +640,32 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             ui.ctx().request_repaint();
         }
     });
+}
+
+fn close_tabs(app: &mut FigApp, keep_uid: Option<u64>, discard: bool) -> bool {
+    if let Some(uid) = keep_uid
+        && let Some(index) = app.session.docs.iter().position(|doc| doc.uid == uid && app.shows(doc.uid))
+    {
+        app.run("doc.switch", json!({"index": index}));
+        app.ui.home = false;
+    }
+
+    let close_uids: Vec<u64> =
+        app.session.docs.iter().rev().filter(|doc| Some(doc.uid) != keep_uid && app.shows(doc.uid)).map(|doc| doc.uid).collect();
+    let mut unsaved = false;
+    for uid in close_uids {
+        let Some(index) = app.session.docs.iter().position(|doc| doc.uid == uid) else { continue };
+        let dirty = app.session.docs.get(index).is_some_and(|doc| doc.is_dirty() && doc.branch_of.is_none());
+        if dirty && !discard {
+            unsaved = true;
+            continue;
+        }
+        app.run("file.close", json!({"index": index, "force": dirty}));
+    }
+    if keep_uid.is_none() && !app.session.docs.iter().any(|doc| app.shows(doc.uid)) {
+        app.ui.home = true;
+    }
+    unsaved
 }
 
 fn tab_thumbnail(ctx: &egui::Context, doc: &figcraft_doc::Document, uid: u64, revision: u64, background: Color32) -> Option<TabThumbnail> {
@@ -771,7 +777,9 @@ pub fn resize_edges(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod layout_tests {
-    use super::{MIN_TAB_WIDTH, OPEN_TIME, OVERFLOW_WIDTH, TabMotion, open_progress, tab_drop_position, tab_layout, tab_name_width};
+    use super::{
+        MIN_TAB_WIDTH, OPEN_TIME, OVERFLOW_WIDTH, TabMotion, close_tabs, divider_rect, open_progress, tab_drop_position, tab_layout, tab_name_width,
+    };
     use egui::{Rect, pos2};
 
     #[test]
@@ -815,6 +823,13 @@ mod layout_tests {
     }
 
     #[test]
+    fn home_dividers_are_solid_one_point_lines_spanning_the_titlebar() {
+        let rect = Rect::from_min_max(pos2(76.0, 0.0), pos2(120.0, 40.0));
+        assert_eq!(divider_rect(rect.min.x, rect), Rect::from_min_max(pos2(76.0, 0.0), pos2(77.0, 40.0)));
+        assert_eq!(divider_rect(rect.max.x, rect), Rect::from_min_max(pos2(120.0, 0.0), pos2(121.0, 40.0)));
+    }
+
+    #[test]
     fn new_tabs_animate_unless_motion_is_reduced() {
         let mut motion = TabMotion::default();
         motion.begin_frame([1].into_iter(), 0.0, false);
@@ -826,5 +841,39 @@ mod layout_tests {
         assert!(motion.opening.is_empty(), "the animation ends");
         motion.begin_frame([1, 2, 3].into_iter(), 2.0, true);
         assert!(motion.opening.is_empty(), "Reduce motion opens tabs at once");
+    }
+
+    #[test]
+    fn bulk_closing_only_affects_tabs_in_the_current_window() {
+        use crate::{FigApp, NoServices};
+        use egui::{Context, RawInput};
+        use figcraft_engine::Session;
+        use serde_json::json;
+
+        fn frame(ctx: &Context, app: &mut FigApp) {
+            ctx.run_ui(RawInput::default(), |ui| app.ui(ui)).textures_delta.clear();
+        }
+
+        let mut session = Session::empty();
+        for name in ["A", "B", "C"] {
+            session.execute("file.new", &json!({"name": name})).unwrap();
+        }
+        let ctx = Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = FigApp::new(session, Box::new(NoServices));
+        frame(&ctx, &mut app);
+        let other_window = crate::control::handle(&mut app, &ctx, "window.new", &json!({"index": 0})).unwrap()["window"].as_u64().unwrap();
+        frame(&ctx, &mut app);
+
+        app.windows.current = 0;
+        let keep_uid = app.session.docs.iter().find(|doc| doc.doc.name == "B").unwrap().uid;
+        assert!(!close_tabs(&mut app, Some(keep_uid), false));
+        assert_eq!(app.session.docs.iter().map(|doc| doc.doc.name.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+        assert_eq!(app.session.docs.iter().find(|doc| doc.doc.name == "A").map(|doc| app.windows.of(doc.uid)), Some(other_window));
+
+        app.windows.current = other_window;
+        assert!(!close_tabs(&mut app, None, false));
+        assert_eq!(app.session.docs.iter().map(|doc| doc.doc.name.as_str()).collect::<Vec<_>>(), ["B"]);
+        assert!(app.ui.home);
     }
 }
